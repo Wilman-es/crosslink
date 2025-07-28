@@ -91,7 +91,7 @@ df["RelatedNames"] = related_names_final
 
 # --- SAVE RESULT ---
 try:
-    df.to_excel(output_file, index=False, header=False)
+    df.to_excel(output_file, index=False, header=True)
     print(f"✅ File saved successfully at: {output_file}")
 except Exception as e:
     print(f"❌ Error saving the file: {e}")
