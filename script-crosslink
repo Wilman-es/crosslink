@@ -1,0 +1,97 @@
+import pandas as pd
+import numpy as np
+from openai import OpenAI
+
+# --- CONFIGURATION ---
+
+input_file = r"C:\Users\user-name\crosslink\input.xlsx"
+output_file = r"C:\Users\user-name\crosslink\crosslink_ok.xlsx"
+api_key = "XXXXXXXXXXXXXXXXX"  # <--- insert your API key here
+
+# Initialize client
+client = OpenAI(api_key=api_key)
+
+# --- READ EXCEL FILE ---
+try:
+    df = pd.read_excel(input_file, header=None)
+except Exception as e:
+    print(f"❌ Error reading the file: {e}")
+    exit(1)
+
+# Assign column names
+df.columns = ["Category", "ID", "Related"]
+
+categories = df["Category"].astype(str).tolist()
+ids = df["ID"].astype(str).tolist()
+
+if len(categories) < 2:
+    print("❌ At least 2 categories are required.")
+    exit(1)
+
+# --- GET EMBEDDINGS ---
+embeddings = []
+for name in categories:
+    try:
+        response = client.embeddings.create(
+            input=name,
+            model="text-embedding-ada-002"
+        )
+        embedding = response.data[0].embedding
+        embeddings.append(np.array(embedding))
+    except Exception as e:
+        print(f"⚠️ Error getting embedding for '{name}': {e}")
+        embeddings.append(None)
+
+# Validate embeddings
+valid_embeddings = [e for e in embeddings if e is not None]
+if not valid_embeddings:
+    print("❌ Could not retrieve any embeddings.")
+    exit(1)
+
+embedding_dim = len(valid_embeddings[0])
+embeddings = [e if e is not None else np.zeros(embedding_dim) for e in embeddings]
+embedding_matrix = np.vstack(embeddings)
+norms = np.linalg.norm(embedding_matrix, axis=1)
+norms[norms == 0] = 1e-9
+
+# --- CALCULATE SIMILARITY WITH STRICT FILTER ---
+related_ids_final = []
+related_names_final = []
+
+id_to_name = dict(zip(df["ID"], df["Category"]))
+SIMILARITY_THRESHOLD = 0.80  # you can adjust this value
+
+for i, source_category in enumerate(categories):
+    vec_i = embedding_matrix[i]
+    dot_product = embedding_matrix @ vec_i
+    cos_sim = dot_product / (norms[i] * norms)
+    cos_sim[i] = -1  # exclude itself
+
+    candidates = []
+    for idx, sim in enumerate(cos_sim):
+        if idx == i or sim < SIMILARITY_THRESHOLD:
+            continue
+        candidates.append({
+            "id": ids[idx],
+            "name": categories[idx],
+            "score": sim
+        })
+
+    # Sort by descending similarity and select top 5
+    top_5 = sorted(candidates, key=lambda x: x["score"], reverse=True)[:5]
+    final_ids = [c["id"] for c in top_5]
+    final_names = [c["name"] for c in top_5]
+
+    related_ids_final.append(";".join(final_ids))
+    related_names_final.append(";".join(final_names))
+
+# --- ADD NEW COLUMNS ---
+df["Related"] = related_ids_final
+df["RelatedNames"] = related_names_final
+
+# --- SAVE RESULT ---
+try:
+    df.to_excel(output_file, index=False, header=False)
+    print(f"✅ File saved successfully at: {output_file}")
+except Exception as e:
+    print(f"❌ Error saving the file: {e}")
